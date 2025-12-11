@@ -493,70 +493,47 @@ $('telegramTrigger').item.json.callback_query?.message?.chat?.id
 
 ---
 
-## 🔌 Integración Multi-Canal (Patrón Adaptador)
+## 🔌 Integración Multi-Canal (Modelo de Datos Canónico)
 
 ### El Problema
+Cada canal (Web, Telegram, WhatsApp) envía datos con estructuras diferentes. Mantener la lógica de negocio compatible con todos es insostenible.
 
-Cuando tienes múltiples canales de entrada (Telegram, Web, WhatsApp), cada uno tiene formatos de datos diferentes:
+### La Solución: Universal Data Object (UDO)
+Define un **único formato JSON estándar** para tu organización. Todos los canales deben adaptar sus datos a este formato ANTES de entrar al flujo principal.
 
-| Campo | Web (Webhook) | Telegram |
-|-------|---------------|----------|
-| Estructura | `body.campo` | `update_data.campo` |
-| Fecha | `YYYY-MM-DD` | `DD/MM/YYYY` |
-| Teléfono | `+58412123456` | `04241234567` |
+**Estructura del UDO:**
+```javascript
+{
+  "cliente": { "nombre": "...", "email": "..." },
+  "evento": { "tipo": "...", "fecha": "YYYY-MM-DD" },
+  "venta": { "paquete": "...", "presupuesto": 100 },
+  "metadata": { "origen": "telegram", "timestamp": "..." }
+}
+```
 
-### La Solución: Nodo Adaptador
+### Arquitectura de Adaptadores
 
-Crea un nodo **antes del Merge** que normalice los datos:
+```mermaid
+graph TD
+    A[Telegram Bot] -->|Raw JSON| B(Adaptador Telegram)
+    C[Web Form] -->|Raw Body| D(Adaptador Web)
+    E[WhatsApp] -->|Raw Msg| F(Adaptador WhatsApp)
+    
+    B --> G{MERGE}
+    D --> G
+    F --> G
+    
+    G -->|JSON Canónico (UDO)| H[Core Business Logic]
+    H --> I[Calcular Días]
+    H --> J[Clasificar Urgencia]
+```
+
+### Implementación en Nodos Core
+Tus nodos de lógica (`calcularDias`, `clasificarUrgencia`) deben ser agnósticos del origen. Prográmalos para leer del UDO, pero mantén retrocompatibilidad si es necesario:
 
 ```javascript
-/**
- * NODO: adaptarDatosTelegram
- * Convierte formato Telegram → formato Web
- */
-
-// Convertir fecha DD/MM/YYYY → YYYY-MM-DD
-function convertirFechaAISO(fechaDDMMYYYY) {
-  if (!fechaDDMMYYYY) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(fechaDDMMYYYY)) {
-    return fechaDDMMYYYY; // Ya está en ISO
-  }
-  const [dia, mes, anio] = fechaDDMMYYYY.split('/');
-  return `${anio}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`;
-}
-
-const datos = $input.item.json.update_data || {};
-
-return {
-  body: {
-    tipo_evento: datos.tipo_evento,
-    fecha_evento: convertirFechaAISO(datos.fecha_evento),
-    ubicacion_evento: datos.ubicacion_evento,
-    nombre_cliente: datos.nombre_cliente,
-    email_cliente: datos.email_cliente,
-    telefono_cliente: datos.telefono_cliente,
-    origen: 'telegram'
-  }
-};
-```
-
-### Flujo con Adaptador
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     CANAL WEB                                │
-│  Webhook → Configuracion → fomularioWeb ────────────────┐   │
-└─────────────────────────────────────────────────────────┐│   │
-                                                          ││   │
-                                                          ▼▼   │
-┌─────────────────────────────────────────────────────── Merge │
-│                   CANAL TELEGRAM                        ▲    │
-│  telegramTrigger → ... → switchValidacionIA            │    │
-│       ↓                         ↓                      │    │
-│ adaptarDatosTelegram ───────────┘                      │    │
-└─────────────────────────────────────────────────────────┘    │
-                                                               │
-                          Merge → calcularDias → clasificar... │
+// Ejemplo de lectura robusta
+const fecha = input.evento?.fecha || input.body?.fecha_evento || input.fecha_evento;
 ```
 
 ---
