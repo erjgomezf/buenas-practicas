@@ -359,6 +359,143 @@ Luego puedes:
 
 ---
 
+## 14. Patrones Avanzados de N8N
+
+### 14.1. Nodos con Múltiples Rutas de Entrada
+
+Cuando un nodo recibe datos de **dos o más rutas diferentes**, se debe usar `$if()` con `isExecuted` para evitar errores:
+
+#### ❌ Problema Común
+```javascript
+// Error: "Node 'ValidadorIA' hasn't been executed"
+={{ $('ValidadorIA').item.json.data || $('switchAccion').item.json.data }}
+```
+
+#### ✅ Solución Correcta
+```javascript
+={{ $if($('ValidadorIA').isExecuted, $('ValidadorIA').item.json.data, $('switchAccion').item.json.data) }}
+```
+
+**Sintaxis:**
+```javascript
+$if(condición, valor_si_true, valor_si_false)
+```
+
+**Casos de uso comunes:**
+- Nodo que recibe de `switchAccion` (flujo normal) O `switchValidacionIA` (flujo IA)
+- Nodo Merge que combina resultados de diferentes branches
+- Actualización de datos que puede venir de múltiples fuentes
+
+### 14.2. Arquitectura de Validación con IA (Dos Capas)
+
+Para minimizar costos de LLM y mejorar la UX, implementa validación en dos capas:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    CAPA 1: BOT                          │
+│  (telegramLogic.js - Sin costo, respuesta inmediata)    │
+├─────────────────────────────────────────────────────────┤
+│  • Validación de formato (regex)                        │
+│  • Validación de tipos (números, emails)                │
+│  • Detección de comandos maliciosos (/ + & %)           │
+│  • Fallback con intentos (2 intentos antes de aceptar)  │
+└─────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────┐
+│                    CAPA 2: IA                           │
+│  (geminiValidador.js - Solo cuando todo está completo)  │
+├─────────────────────────────────────────────────────────┤
+│  • Validación semántica (¿es una ciudad real?)          │
+│  • Coherencia de datos (¿fecha razonable?)              │
+│  • Preguntas específicas para campos faltantes          │
+│  • Límite de intentos antes de escalar a humano         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Beneficios:**
+- 80% de errores capturados en Capa 1 (sin costo LLM)
+- IA solo se usa para validación final
+- Respuesta más rápida para errores obvios
+
+### 14.3. Nodos Code Pre y Post IA
+
+#### Nodo Pre-IA (`prepararDatosIA`)
+Prepara el contexto para el LLM:
+
+```javascript
+// Parsear datos de sesión
+const datos = JSON.parse(session.datos_json || '{}');
+
+// Obtener campo pendiente
+const campoPendiente = datos._campo_pendiente;
+
+// Actualizar con respuesta del usuario
+if (campoPendiente && userInput) {
+  datos[campoPendiente] = userInput;
+}
+
+return {
+  update_data: datos,
+  contexto_validacion: JSON.stringify(datos)
+};
+```
+
+#### Nodo Post-IA (`geminiValidador`)
+Procesa la respuesta y decide acción:
+
+```javascript
+// Parsear respuesta (puede ser string o JSON)
+const validacion = typeof respuesta === 'string'
+  ? JSON.parse(respuesta.replace(/```json|```/g, '')
+  : respuesta;
+
+// Determinar acción
+if (validacion.valido) {
+  return { action: 'send_to_central', ... };
+} else if (validacion.campo_faltante) {
+  return { 
+    action: 'ask_field',
+    update_data: { _campo_pendiente: validacion.campo_faltante, ... }
+  };
+} else {
+  return { action: 'send_to_error_support', ... };
+}
+```
+
+### 14.4. Bypass de Nodos con `tipoValidacion`
+
+Usa un campo de control para rutear el flujo:
+
+```
+telegramTrigger → buscarSesion → esValidacionIA?
+  → TRUE (tipoValidacion === 'IA'): prepararDatosIA → AI Agent
+  → FALSE: logicaBot → switchAccion
+```
+
+**En Google Sheets, guarda:**
+```
+| chat_id | tipoValidacion | _campo_pendiente |
+|---------|----------------|------------------|
+| 12345   | IA             | ubicacion_evento |
+```
+
+### 14.5. Sanitización Pre-Validación
+
+Antes de enviar a la IA, sanitiza campos sospechosos:
+
+```javascript
+const caracteresInvalidos = /[\.\.\/\+\&\%\@\#\$\!\?\*\<\>\|]/;
+
+for (const campo of ['ubicacion_evento', 'nombre_cliente']) {
+  if (datos[campo] && caracteresInvalidos.test(datos[campo])) {
+    datos[`_original_${campo}`] = datos[campo]; // Debug
+    datos[campo] = null; // IA lo detectará como faltante
+  }
+}
+```
+
+---
+
 ## Apéndice A: Checklist Pre-Deployment
 
 Antes de activar un workflow en producción, verifica:
@@ -390,6 +527,8 @@ Antes de activar un workflow en producción, verifica:
 - Bases de datos (PostgreSQL, MySQL, MongoDB)
 - CRMs (HubSpot, Salesforce)
 
+- Webhooks (Stripe, GitHub, etc.)
+
 ---
 
-**Última Actualización**: 2025-12-01
+**Última Actualización**: 2025-12-09
