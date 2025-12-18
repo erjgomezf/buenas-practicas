@@ -531,4 +531,165 @@ Antes de activar un workflow en producción, verifica:
 
 ---
 
-**Última Actualización**: 2025-12-09
+## 15. Patrón de Detección de Comandos (Gateway)
+
+### 15.1. Arquitectura de Gateway con Comandos
+
+Para bots interactivos (Telegram, WhatsApp), implementa un nodo de detección de comandos **antes** de la lógica principal:
+
+```
+telegramTrigger → buscarSesion → detectarComando → Switch (accion)
+                                                      ├── continuar_flujo → logicaBot
+                                                      ├── notificar_reservacion → HTTP
+                                                      ├── confirmar_cancelacion → HTTP
+                                                      ├── cancelar_sesion → Sheets(Delete) → HTTP
+                                                      └── mostrar_ayuda → HTTP
+```
+
+### 15.2. Nodo `detectarComando`
+
+Intercepta comandos globales (`/start`, `/cancelar`, `/ayuda`) y decide la acción antes de que pase al flujo normal:
+
+```javascript
+const incomingText = telegramData.message?.text || '';
+const esComando = incomingText.startsWith('/');
+
+// Detectar estado de la sesión
+const tipoValidacion = sesion.tipoValidacion || 'BOT';
+const pasoActual = sesion.paso_actual || 'start';
+
+let resultado = { accion: 'continuar_flujo' };
+
+if (esComando) {
+  if (comando === '/cancelar') {
+    resultado.accion = 'confirmar_cancelacion';
+    resultado.mensaje = '¿Estás seguro?';
+    resultado.buttons = [[{text: 'Sí', callback_data: 'ejecutar_cancelar'}]];
+  }
+}
+
+// También manejar callbacks de confirmación
+const callback = telegramData.callback_query?.data;
+if (callback === 'ejecutar_cancelar') {
+  resultado.accion = 'cancelar_sesion';
+}
+
+// Flags para el Switch
+resultado.esNuevoUsuario = !sesion.chat_id;
+resultado.tipoValidacion = tipoValidacion;
+
+return resultado;
+```
+
+### 15.3. Beneficios del Patrón
+
+- **Centralización:** Todos los comandos globales manejados en un solo lugar
+- **Simplificación:** Elimina múltiples nodos IF del flujo principal
+- **Consistencia:** Misma lógica de cancelación desde comando `/cancelar` o botón "Cancelar"
+- **Extensibilidad:** Fácil agregar nuevos comandos sin modificar lógica principal
+
+---
+
+## 16. Optimización de Switch con Múltiples Condiciones
+
+### 16.1. Consolidación de IFs en Switch
+
+En lugar de múltiples nodos IF encadenados:
+
+```
+❌ Antes:
+IF(esNuevoUsuario) → IF(tipoValidacion=IA) → IF(esCancelacion) → ...
+```
+
+Usa un solo Switch con reglas combinadas:
+
+```
+✅ Después:
+Switch(accionComando)
+  ├── {{ $json.accion === 'continuar_flujo' && $json.esNuevoUsuario === true }} → crearSesion
+  ├── {{ $json.accion === 'continuar_flujo' && $json.tipoValidacion === 'BOT' }} → logicaBot
+  ├── {{ $json.accion === 'continuar_flujo' && $json.tipoValidacion === 'IA' }} → prepararDatosIA
+  └── {{ $json.accion === 'cancelar_sesion' }} → Sheets(Delete)
+```
+
+### 16.2. Expresiones para Switch en N8N
+
+```javascript
+// Regla compuesta (AND)
+{{ $json.accion === 'continuar_flujo' && $json.esNuevoUsuario === true }}
+
+// Regla simple
+{{ $json.accion === 'cancelar_sesion' }}
+
+// Regla con fallback
+{{ $json.accion === 'confirmar_cancelacion' || $json.action === 'confirmar_cancelacion' }}
+```
+
+---
+
+## 17. Configuración de Google Cloud para N8N Local
+
+### 17.1. Pasos para OAuth2 (Gmail + Sheets)
+
+1. **Crear Proyecto:** `console.cloud.google.com` → Nuevo Proyecto
+2. **Habilitar APIs:** Gmail API, Google Sheets API, Google Drive API
+3. **Pantalla de Consentimiento:** 
+   - Tipo: Externo
+   - **CRÍTICO:** Agregar tu email en "Usuarios de prueba"
+4. **Credenciales:**
+   - Tipo: ID de cliente OAuth → Aplicación Web
+   - URI de redirección: `http://localhost:5678/rest/oauth2-credential/callback`
+5. **En N8N:** Crear credencial con Client ID y Client Secret
+
+### 17.2. Renovación de Tokens (Modo Testing)
+
+En modo Testing, el token expira cada 7 días. Cuando falle:
+
+1. Abrir credencial en N8N
+2. Clic en "Reconnect" o "Sign in with Google"
+3. Re-autorizar
+4. Guardar
+
+**Tip:** Publica la app en "Producción" para evitar renovación manual (requiere verificación de Google).
+
+### 17.3. Errores Comunes
+
+| Error | Causa | Solución |
+|-------|-------|----------|
+| "Access denied" | Email no está en usuarios de prueba | Agregar email en Pantalla de Consentimiento |
+| "Invalid redirect" | URI mal configurada | Verificar que coincida exactamente con N8N |
+| "Token expired" | Modo Testing, 7 días | Reconectar credencial |
+
+---
+
+## 18. Lecciones Aprendidas (Versión Diciembre 2024)
+
+### 18.1. Conexión de Credenciales Google
+
+- **Problema:** Credenciales fallaban en N8N local
+- **Causa:** Email no agregado como usuario de prueba en OAuth
+- **Solución:** Agregar email en "Pantalla de Consentimiento" → "Usuarios de prueba"
+- **Resultado:** Conexión estable con Sheets y Gmail
+
+### 18.2. Simplificación con Switch Centralizado
+
+- **Problema:** Demasiados nodos IF creaban flujo confuso
+- **Solución:** Un nodo `detectarComando` + Switch con reglas compuestas
+- **Resultado:** Flujo más limpio, fácil de mantener, menos conexiones cruzadas
+
+### 18.3. Confirmación Antes de Acciones Destructivas
+
+- **Problema:** Botón "Cancelar" borraba datos sin confirmar
+- **Solución:** Patrón `confirmar_X` → `ejecutar_X` con botones Sí/No
+- **Resultado:** UX más segura, menos errores accidentales
+
+### 18.4. Unificación de Flujos de Cancelación
+
+- **Problema:** Comando `/cancelar` y botón "Cancelar" tenían lógicas separadas
+- **Solución:** Ambos generan `accion: 'confirmar_cancelacion'`, van a misma rama del Switch
+- **Resultado:** Comportamiento consistente, código DRY
+
+---
+
+**Última Actualización**: 2024-12-18
+
