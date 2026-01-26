@@ -691,5 +691,20 @@ En modo Testing, el token expira cada 7 días. Cuando falle:
 
 ---
 
-**Última Actualización**: 2024-12-18
+## 19. Patrones Avanzados
 
+Para patrones avanzados y lecciones aprendidas de la migración 2026, consulta:
+
+📘 **[Patrones Avanzados de N8N](./buenas-practicas-n8n-patrones-avanzados.md)**
+
+Incluye:
+- Normalización de datos con nodos dedicados
+- Configuración correcta de HTTP Requests
+- Máquinas de estado con Fast-Forward
+- Fallbacks robustos para datos críticos
+- Manejo correcto de JSON de APIs
+- Debugging estratégico
+
+---
+
+**Última Actualización**: 2026-01-26
