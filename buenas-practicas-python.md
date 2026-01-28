@@ -341,6 +341,69 @@ customer_plan_db_complex = session.exec(
 
 ---
 
+### 5.3. Seguridad: Queries Parametrizadas (Prevenir SQL Injection)
+
+**Nunca concatenes valores directamente en queries SQL.** Esto abre la puerta a ataques de inyección SQL.
+
+#### ❌ Incorrecto (Vulnerable)
+
+```python
+# PELIGROSO: Concatenación directa
+days = 7
+cursor.execute(f"""
+    DELETE FROM sesiones WHERE fecha < datetime('now', '-{days} days')
+""")
+
+# PELIGROSO: Usando .format()
+cursor.execute("""
+    SELECT * FROM usuarios WHERE nombre = '{}'
+""".format(nombre_usuario))
+```
+
+Un atacante podría ingresar: `Juan'; DROP TABLE usuarios;--` y borrar tu tabla.
+
+#### ✅ Correcto (Seguro)
+
+Usa **placeholders** (`?` en SQLite, `%s` en PostgreSQL/MySQL) y pasa los valores como tupla:
+
+```python
+from datetime import datetime, timedelta
+
+# Calcular en Python, pasar como parámetro
+cutoff_date = datetime.now() - timedelta(days=7)
+cutoff_str = cutoff_date.strftime('%Y-%m-%d %H:%M:%S')
+
+cursor.execute(
+    "DELETE FROM sesiones WHERE fecha < ?",
+    (cutoff_str,)  # ← Tupla con valores
+)
+
+# Múltiples parámetros
+cursor.execute(
+    "INSERT INTO usuarios (nombre, email) VALUES (?, ?)",
+    (nombre, email)
+)
+```
+
+#### 🔑 Reglas Clave
+
+| Regla | Ejemplo |
+|-------|---------|
+| Un parámetro | `cursor.execute("... WHERE id = ?", (id,))` |
+| Múltiples parámetros | `cursor.execute("... VALUES (?, ?, ?)", (a, b, c))` |
+| Tupla de un elemento | Requiere coma: `(valor,)` no `(valor)` |
+
+#### Con SQLModel/SQLAlchemy
+
+SQLModel ya maneja esto automáticamente cuando usas sus métodos:
+
+```python
+# ✅ Seguro: SQLModel parametriza internamente
+query = select(Usuario).where(Usuario.nombre == nombre_usuario)
+```
+
+---
+
 ## 6. Modelos Arquitectónicos en Python
 
 ### 6.1. Panorama y Adopción Progresiva
